@@ -96,7 +96,7 @@ export default function App() {
   const [selected, setSelected] = useState(null);
 
   useEffect(() => {
-    fetch("http://localhost:3000/all-emails")
+    fetch("https://gmail-ai-sorter.onrender.com/all-emails")
       .then((r) => r.json())
       .then((data) => { setEmails(data); setLoading(false); })
       .catch(() => { setError("Server se connect nahi ho paya. server.js chal raha hai?"); setLoading(false); });
