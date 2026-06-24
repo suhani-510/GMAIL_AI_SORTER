@@ -5,7 +5,9 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "https://gmail-ui.vercel.app"  // apna actual Vercel URL daalna
+}));
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
