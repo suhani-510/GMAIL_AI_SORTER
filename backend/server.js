@@ -11,7 +11,7 @@ const app = express();
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  origin: process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com',
   credentials: true
 }));
 app.use(express.json());
@@ -145,9 +145,9 @@ app.get('/auth/personal/callback', async (req, res) => {
     const { data } = await oauth2.userinfo.get();
     req.session.userId = data.email;
     req.session.personalTokens = tokens;
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}?personal=connected`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?personal=connected`);
   } catch (err) {
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}?error=personal_failed`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=personal_failed`);
   }
 });
 
@@ -164,9 +164,9 @@ app.get('/auth/college/callback', async (req, res) => {
   try {
     const { tokens } = await oauth2ClientCollege.getToken(req.query.code);
     req.session.collegeTokens = tokens;
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}?college=connected`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?college=connected`);
   } catch (err) {
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}?error=college_failed`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=college_failed`);
   }
 });
 
