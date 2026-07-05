@@ -118,6 +118,7 @@ async function fetchAndSave(messages, gmailClient, source, userId) {
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 
 app.get('/api/status', (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.json({
     personalConnected: !!req.session.personalTokens,
     collegeConnected: !!req.session.collegeTokens,
