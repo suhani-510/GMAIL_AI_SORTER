@@ -8,6 +8,7 @@ const MongoStore = require('connect-mongo');
 require('dotenv').config();
 
 const app = express();
+app.set('trust proxy', 1);
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(cors({
@@ -28,6 +29,7 @@ app.use(session({
   saveUninitialized: false,
   store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
   cookie: {
+    httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000
@@ -146,8 +148,14 @@ app.get('/auth/personal/callback', async (req, res) => {
     const { data } = await oauth2.userinfo.get();
     req.session.userId = data.email;
     req.session.personalTokens = tokens;
-    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?personal=connected`);
+    req.session.save((err) => {
+      if (err) {
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=session_save_failed`);
+      }
+      res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?personal=connected`);
+    });
   } catch (err) {
+    console.error('Personal callback error:', err);
     res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=personal_failed`);
   }
 });
@@ -165,8 +173,14 @@ app.get('/auth/college/callback', async (req, res) => {
   try {
     const { tokens } = await oauth2ClientCollege.getToken(req.query.code);
     req.session.collegeTokens = tokens;
-    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?college=connected`);
+    req.session.save((err) => {
+      if (err) {
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=session_save_failed`);
+      }
+      res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?college=connected`);
+    });
   } catch (err) {
+    console.error('College callback error:', err);
     res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=college_failed`);
   }
 });

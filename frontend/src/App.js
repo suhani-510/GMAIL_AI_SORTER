@@ -138,17 +138,35 @@ export default function App() {
   const [showInbox, setShowInbox] = useState(false);
 
   useEffect(() => {
-    axios.get(`${API}/api/status`, { withCredentials: true })
-      .then(r => {
-        setStatus(r.data);
-        if (r.data.personalConnected) setShowInbox(true);
-      }).catch(() => {});
-
     const params = new URLSearchParams(window.location.search);
+    const error = params.get('error');
+    
+    if (error) {
+      alert(`Authentication failed: ${error}`);
+      window.history.replaceState({}, '', '/');
+    }
+
+    // Check session status
+    const checkStatus = () => {
+      axios.get(`${API}/api/status`, { withCredentials: true })
+        .then(r => {
+          setStatus(r.data);
+          if (r.data.personalConnected) setShowInbox(true);
+        })
+        .catch(err => {
+          console.error('Status check error:', err);
+        });
+    };
+
+    checkStatus();
+
+    // After OAuth callback, wait a moment and check again
     if (params.get('personal') === 'connected' || params.get('college') === 'connected') {
       window.history.replaceState({}, '', '/');
-      axios.get(`${API}/api/status`, { withCredentials: true })
-        .then(r => { setStatus(r.data); if (r.data.personalConnected) setShowInbox(true); });
+      // Add slight delay to ensure session is fully saved
+      setTimeout(() => {
+        checkStatus();
+      }, 500);
     }
   }, []);
 
