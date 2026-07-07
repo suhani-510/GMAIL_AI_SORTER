@@ -3,17 +3,15 @@ const { google } = require('googleapis');
 const Groq = require('groq-sdk');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const session = require('express-session');
-const MongoStore = require('connect-mongo');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', 1);
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com',
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json());
 
@@ -22,19 +20,13 @@ mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB connected'))
   .catch(err => console.log('MongoDB error:', err));
 
-// ─── Session ──────────────────────────────────────────────────────────────────
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'gmail-ai-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000
-  }
-}));
+// ─── UserTokens Schema — Google tokens ab yahan store honge, session mein nahi ──
+const UserTokensSchema = new mongoose.Schema({
+  email: { type: String, unique: true },
+  personalTokens: Object,
+  collegeTokens: Object,
+});
+const UserTokens = mongoose.model('UserTokens', UserTokensSchema);
 
 // ─── MongoDB Schema ───────────────────────────────────────────────────────────
 const EmailSchema = new mongoose.Schema({
@@ -64,6 +56,22 @@ const oauth2ClientCollege = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.REDIRECT_URI_COLLEGE
 );
+
+// ─── JWT helpers ──────────────────────────────────────────────────────────────
+function signToken(email) {
+  return jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '30d' });
+}
+
+function authenticateJWT(req, res, next) {
+  const header = req.headers.authorization;
+  const token = header && header.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
+    if (err) return res.status(401).json({ error: 'Invalid or expired token' });
+    req.userEmail = payload.email;
+    next();
+  });
+}
 
 // ─── Helper: classify ─────────────────────────────────────────────────────────
 async function classifyEmail(from, subject) {
@@ -119,12 +127,12 @@ async function fetchAndSave(messages, gmailClient, source, userId) {
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 
-app.get('/api/status', (req, res) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+app.get('/api/status', authenticateJWT, async (req, res) => {
+  const user = await UserTokens.findOne({ email: req.userEmail });
   res.json({
-    personalConnected: !!req.session.personalTokens,
-    collegeConnected: !!req.session.collegeTokens,
-    userId: req.session.userId
+    personalConnected: !!(user && user.personalTokens),
+    collegeConnected: !!(user && user.collegeTokens),
+    userId: req.userEmail
   });
 });
 
@@ -146,16 +154,16 @@ app.get('/auth/personal/callback', async (req, res) => {
     oauth2Client.setCredentials(tokens);
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const { data } = await oauth2.userinfo.get();
-    req.session.userId = data.email;
-    req.session.personalTokens = tokens;
-    req.session.save((err) => {
-      if (err) {
-        return res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=session_save_failed`);
-      }
-      res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?personal=connected`);
-    });
+
+    await UserTokens.findOneAndUpdate(
+      { email: data.email },
+      { email: data.email, personalTokens: tokens },
+      { upsert: true }
+    );
+
+    const jwtToken = signToken(data.email);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?token=${jwtToken}&personal=connected`);
   } catch (err) {
-    console.error('Personal callback error:', err);
     res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=personal_failed`);
   }
 });
@@ -164,7 +172,8 @@ app.get('/auth/personal/callback', async (req, res) => {
 app.get('/auth/college', (req, res) => {
   const url = oauth2ClientCollege.generateAuthUrl({
     access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/gmail.readonly']
+    scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+    state: req.query.token || ''
   });
   res.redirect(url);
 });
@@ -172,44 +181,44 @@ app.get('/auth/college', (req, res) => {
 app.get('/auth/college/callback', async (req, res) => {
   try {
     const { tokens } = await oauth2ClientCollege.getToken(req.query.code);
-    req.session.collegeTokens = tokens;
-    req.session.save((err) => {
-      if (err) {
-        return res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=session_save_failed`);
-      }
-      res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?college=connected`);
-    });
+    const payload = jwt.verify(req.query.state, process.env.JWT_SECRET);
+
+    await UserTokens.findOneAndUpdate(
+      { email: payload.email },
+      { collegeTokens: tokens },
+      { upsert: true }
+    );
+
+    res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?college=connected`);
   } catch (err) {
-    console.error('College callback error:', err);
     res.redirect(`${process.env.FRONTEND_URL || 'https://gmail-sorter-frontend.onrender.com'}?error=college_failed`);
   }
 });
 
 // Fetch all emails
-app.get('/api/emails', async (req, res) => {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: 'Pehle login karo' });
-  }
+app.get('/api/emails', authenticateJWT, async (req, res) => {
   try {
-    const userId = req.session.userId;
+    const user = await UserTokens.findOne({ email: req.userEmail });
+    if (!user) return res.status(401).json({ error: 'Pehle login karo' });
+
     const allEmails = [];
 
-    if (req.session.personalTokens) {
-      oauth2Client.setCredentials(req.session.personalTokens);
+    if (user.personalTokens) {
+      oauth2Client.setCredentials(user.personalTokens);
       const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
       const list = await gmail.users.messages.list({ userId: 'me', maxResults: 15 });
       if (list.data.messages) {
-        const emails = await fetchAndSave(list.data.messages, gmail, 'Personal', userId);
+        const emails = await fetchAndSave(list.data.messages, gmail, 'Personal', req.userEmail);
         allEmails.push(...emails);
       }
     }
 
-    if (req.session.collegeTokens) {
-      oauth2ClientCollege.setCredentials(req.session.collegeTokens);
+    if (user.collegeTokens) {
+      oauth2ClientCollege.setCredentials(user.collegeTokens);
       const gmailCollege = google.gmail({ version: 'v1', auth: oauth2ClientCollege });
       const list2 = await gmailCollege.users.messages.list({ userId: 'me', maxResults: 15 });
       if (list2.data.messages) {
-        const emails = await fetchAndSave(list2.data.messages, gmailCollege, 'College', userId);
+        const emails = await fetchAndSave(list2.data.messages, gmailCollege, 'College', req.userEmail);
         allEmails.push(...emails);
       }
     }
@@ -232,12 +241,6 @@ app.get('/api/emails', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// Logout
-app.get('/auth/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;

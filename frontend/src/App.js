@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 
 const API = process.env.REACT_APP_BACKEND_URL || "http://localhost:3000";
+const TOKEN_KEY = "gmail_ai_token";
 
 const CATEGORIES = [
   { key: "all",         label: "All Mail",      color: "#5f6368", bg: "#f1f3f4" },
@@ -31,7 +32,7 @@ function getAvatarColor(from) {
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ status, onRefresh }) {
+function LoginScreen({ status, token, onRefresh }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f6f8fc" }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: "48px 40px", boxShadow: "0 2px 10px rgba(0,0,0,0.1)", width: 400, textAlign: "center" }}>
@@ -51,17 +52,20 @@ function LoginScreen({ status, onRefresh }) {
           )}
         </div>
 
-        <div style={{ marginBottom: 24 }}>
-          {status.collegeConnected ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 24px", background: "#e6f4ea", borderRadius: 8, color: "#188038", fontSize: 14, fontWeight: 500 }}>
-              ✓ College Gmail Connected
-            </div>
-          ) : (
-            <a href={`${API}/auth/college`} style={{ display: "block", padding: "12px 24px", background: "#fff", border: "1px solid #dadce0", borderRadius: 8, color: "#202124", fontSize: 14, fontWeight: 500, textDecoration: "none", marginTop: 8 }}>
-              Connect College Gmail (Optional)
-            </a>
-          )}
-        </div>
+        {/* College connect needs a token to attach to, so it only appears once personal login is done */}
+        {token && (
+          <div style={{ marginBottom: 24 }}>
+            {status.collegeConnected ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 24px", background: "#e6f4ea", borderRadius: 8, color: "#188038", fontSize: 14, fontWeight: 500 }}>
+                ✓ College Gmail Connected
+              </div>
+            ) : (
+              <a href={`${API}/auth/college?token=${token}`} style={{ display: "block", padding: "12px 24px", background: "#fff", border: "1px solid #dadce0", borderRadius: 8, color: "#202124", fontSize: 14, fontWeight: 500, textDecoration: "none", marginTop: 8 }}>
+                Connect College Gmail (Optional)
+              </a>
+            )}
+          </div>
+        )}
 
         {status.personalConnected && (
           <button onClick={onRefresh} style={{ width: "100%", padding: "12px", background: "#188038", borderRadius: 8, color: "#fff", fontSize: 15, fontWeight: 500, border: "none", cursor: "pointer" }}>
@@ -130,6 +134,7 @@ function EmailDetail({ email, onBack }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const [token, setToken]         = useState(null);
   const [status, setStatus]       = useState({ personalConnected: false, collegeConnected: false });
   const [emails, setEmails]       = useState({});
   const [active, setActive]       = useState("all");
@@ -137,43 +142,55 @@ export default function App() {
   const [selected, setSelected]   = useState(null);
   const [showInbox, setShowInbox] = useState(false);
 
+  // 1. On load: handle error param, then pick up a fresh token from the OAuth
+  //    redirect, or fall back to a previously saved one.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const error = params.get('error');
-    
+
     if (error) {
       alert(`Authentication failed: ${error}`);
       window.history.replaceState({}, '', '/');
     }
 
-    // Check session status
-    const checkStatus = () => {
-      axios.get(`${API}/api/status`, { withCredentials: true })
-        .then(r => {
-          setStatus(r.data);
-          if (r.data.personalConnected) setShowInbox(true);
-        })
-        .catch(err => {
-          console.error('Status check error:', err);
-        });
-    };
-
-    checkStatus();
-
-    // After OAuth callback, wait a moment and check again
-    if (params.get('personal') === 'connected' || params.get('college') === 'connected') {
+    const urlToken = params.get('token');
+    if (urlToken) {
+      localStorage.setItem(TOKEN_KEY, urlToken);
+      setToken(urlToken);
       window.history.replaceState({}, '', '/');
-      // Add slight delay to ensure session is fully saved
-      setTimeout(() => {
-        checkStatus();
-      }, 500);
+    } else {
+      const saved = localStorage.getItem(TOKEN_KEY);
+      if (saved) setToken(saved);
     }
+  }, []);
+
+  // 2. Whenever we have a token, check status with it (no more delay/retry hack needed —
+  //    there's no session-save race condition once auth is via header, not cookie).
+  useEffect(() => {
+    if (!token) return;
+    axios.get(`${API}/api/status`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).then(r => {
+      setStatus(r.data);
+      if (r.data.personalConnected) setShowInbox(true);
+    }).catch(err => {
+      console.error('Status check error:', err);
+      localStorage.removeItem(TOKEN_KEY);
+      setToken(null);
+    });
+  }, [token]);
+
+  // 3. Wake the Render free-tier backend up as early as possible
+  useEffect(() => {
+    fetch(`${API}/health`).catch(() => {});
   }, []);
 
   const fetchEmails = async () => {
     setLoading(true);
     try {
-      const r = await axios.get(`${API}/api/emails`, { withCredentials: true });
+      const r = await axios.get(`${API}/api/emails`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setEmails(r.data);
       setShowInbox(true);
     } catch (err) {
@@ -182,8 +199,9 @@ export default function App() {
     setLoading(false);
   };
 
-  const logout = async () => {
-    await axios.get(`${API}/auth/logout`, { withCredentials: true });
+  const logout = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    setToken(null);
     setStatus({ personalConnected: false, collegeConnected: false });
     setEmails({});
     setShowInbox(false);
@@ -195,7 +213,7 @@ export default function App() {
   const displayed = active === "all" ? allEmails : (emails[active] || []).map(e => ({ ...e, category: active }));
   const countFor  = key => key === "all" ? allEmails.length : (emails[key] || []).length;
 
-  if (!showInbox) return <LoginScreen status={status} onRefresh={fetchEmails} />;
+  if (!showInbox) return <LoginScreen status={status} token={token} onRefresh={fetchEmails} />;
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "'Google Sans', Roboto, sans-serif", background: "#f6f8fc" }}>
@@ -228,7 +246,7 @@ export default function App() {
         <div style={{ marginTop: "auto", padding: "8px 16px", borderTop: "1px solid #e0e0e0" }}>
           {status.collegeConnected
             ? <div style={{ fontSize: 12, color: "#188038", marginBottom: 8 }}>✓ College Connected</div>
-            : <a href={`${API}/auth/college`} style={{ display: "block", fontSize: 12, color: "#1a73e8", marginBottom: 8, textDecoration: "none" }}>+ Connect College Gmail</a>
+            : <a href={`${API}/auth/college?token=${token}`} style={{ display: "block", fontSize: 12, color: "#1a73e8", marginBottom: 8, textDecoration: "none" }}>+ Connect College Gmail</a>
           }
           <button onClick={logout}
             style={{ background: "none", border: "1px solid #dadce0", borderRadius: 6, padding: "6px 12px", fontSize: 12, color: "#5f6368", cursor: "pointer", width: "100%" }}>
